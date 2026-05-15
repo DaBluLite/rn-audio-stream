@@ -51,6 +51,7 @@ export class AudioPlayer {
   private _retryAttempts = 0;
   private _initialized = false;
   private _progressInterval: ReturnType<typeof setInterval> | null = null;
+  private _isReplacingQueue = false;
 
   constructor(options: AudioPlayerOptions = {}) {
     this._opts = { ...DEFAULT_OPTIONS, ...options };
@@ -325,7 +326,7 @@ export class AudioPlayer {
       if (idx !== -1) this._queue.jumpTo(idx);
     }
 
-    await this._replaceNativeQueue();
+    await this._replaceNativeQueue(this._queue.currentIndex);
     if (wasPlaying) {
       await TrackPlayer.play();
     }
@@ -379,6 +380,8 @@ export class AudioPlayer {
   private _subscribeToSoundEvents(): void {
     this._soundSubscriptions.push(
       TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, (event) => {
+        if (this._isReplacingQueue) return;
+
         if (typeof event.index === "number") {
           try {
             this._queue.jumpTo(event.index);
@@ -490,10 +493,11 @@ export class AudioPlayer {
   private async _loadCurrent(autoPlay: boolean): Promise<void> {
     const track = this._queue.current;
     if (!track) return;
+    const targetIndex = this._queue.currentIndex;
 
     const previous = this._state.currentTrack;
     try {
-      await this._replaceNativeQueue();
+      await this._replaceNativeQueue(targetIndex);
       if (autoPlay) await TrackPlayer.play();
 
       this._retryAttempts = 0;
@@ -583,17 +587,24 @@ export class AudioPlayer {
     }
   }
 
-  private async _replaceNativeQueue(): Promise<void> {
+  private async _replaceNativeQueue(targetIndex: number): Promise<void> {
     const nativeQueue = this._queue.tracks.map((track) => this._toNativeTrack(track));
-    if (nativeQueue.length === 0) {
-      await TrackPlayer.reset();
-      return;
+    this._isReplacingQueue = true;
+    try {
+      await TrackPlayer.setPlayWhenReady(false);
+      if (nativeQueue.length === 0) {
+        await TrackPlayer.reset();
+        return;
+      }
+
+      await TrackPlayer.setQueue(nativeQueue);
+      if (targetIndex >= 0) {
+        await TrackPlayer.skip(targetIndex);
+      }
+      await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._state.repeatMode));
+    } finally {
+      this._isReplacingQueue = false;
     }
-    await TrackPlayer.setQueue(nativeQueue);
-    if (this._queue.currentIndex >= 0) {
-      await TrackPlayer.skip(this._queue.currentIndex);
-    }
-    await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._state.repeatMode));
   }
 
   private _toNativeTrack(track: Track): NativeTrack {

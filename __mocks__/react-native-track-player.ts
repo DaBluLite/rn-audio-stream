@@ -29,6 +29,7 @@ const TrackPlayer = {
   play: jest.fn().mockResolvedValue(undefined),
   pause: jest.fn().mockResolvedValue(undefined),
   stop: jest.fn().mockResolvedValue(undefined),
+  setPlayWhenReady: jest.fn().mockResolvedValue(false),
   seekTo: jest.fn().mockResolvedValue(undefined),
   setVolume: jest.fn().mockResolvedValue(undefined),
   setRate: jest.fn().mockResolvedValue(undefined),

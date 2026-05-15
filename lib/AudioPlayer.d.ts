@@ -15,6 +15,7 @@ export declare class AudioPlayer {
     private _retryAttempts;
     private _initialized;
     private _progressInterval;
+    private _isReplacingQueue;
     constructor(options?: AudioPlayerOptions);
     init(): Promise<void>;
     setQueue(tracks: Track[], startIndex?: number, autoPlay?: boolean): Promise<void>;
