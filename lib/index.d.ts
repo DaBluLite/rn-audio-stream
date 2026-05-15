@@ -8,8 +8,6 @@
  *  - Gapless playback
  *  - Shuffle (Fisher-Yates, preserves current track)
  *  - Repeat modes: off / track / queue
- *  - Lock-screen and notification media controls (iOS + Android)
- *  - Background audio
  *  - Automatic retry on stream failure
  *  - Typed React hooks for easy UI integration
  *

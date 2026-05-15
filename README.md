@@ -5,11 +5,9 @@ A well-typed React Native audio player module with first-class support for:
 - **HTTP/HTTPS audio streaming** — MP3, AAC, FLAC, OGG, Opus, HLS, and more
 - **Navidrome / OpenSubsonic** API compatibility out of the box
 - **Live / internet-radio streams** (no seek, infinite duration)
-- **Gapless playback** — pre-buffers the next track before the current one ends
+- **Queue playback** from remote URLs and local assets
 - **Shuffle** — Fisher-Yates algorithm that keeps the current track playing
 - **Repeat modes** — off / single track / entire queue
-- **Lock-screen & notification controls** on iOS and Android
-- **Background audio** (survives app backgrounding, phone calls, etc.)
 - **Automatic retry** on transient stream failures
 - **Typed React hooks** for painless UI integration
 
@@ -26,7 +24,6 @@ A well-typed React Native audio player module with first-class support for:
 - [Repeat modes](#repeat-modes)
 - [React hooks](#react-hooks)
 - [API reference](#api-reference)
-- [Background audio setup](#background-audio-setup)
 - [TypeScript types](#typescript-types)
 
 ---
@@ -38,7 +35,7 @@ A well-typed React Native audio player module with first-class support for:
 npm install github:dablulite/rn-audio-stream
 
 # 2. Install the required native peer dependency
-npm install react-native-track-player
+npm install react-native-sound-player
 
 # 3. iOS — link the native CocoaPods pod
 cd ios && pod install
@@ -52,35 +49,20 @@ cd ios && pod install
 
 ## Quick start
 
-### 1. Register the playback service
-
-Create `src/playbackService.ts` in your app (copy from `src/playbackService.ts` in this package) and register it **once**, before your React tree mounts:
-
-```ts
-// index.js  (your RN entry point)
-import { AppRegistry } from "react-native";
-import TrackPlayer from "react-native-track-player";
-import App from "./src/App";
-
-TrackPlayer.registerPlaybackService(() => require("./src/playbackService"));
-AppRegistry.registerComponent("MyApp", () => App);
-```
-
-### 2. Create a player
+### 1. Create a player
 
 ```ts
 import { createAudioPlayer } from "rn-audio-stream";
 
 // Somewhere outside your component tree (Context, store, module-level singleton…)
 const player = await createAudioPlayer({
-  gapless: true,
   shuffle: false,
   repeatMode: "queue",
   volume: 1.0,
 });
 ```
 
-### 3. Load tracks and play
+### 2. Load tracks and play
 
 ```ts
 await player.setQueue([
@@ -102,7 +84,7 @@ await player.setQueue([
 ], 0, /* autoPlay */ true);
 ```
 
-### 4. Use hooks in your components
+### 3. Use hooks in your components
 
 ```tsx
 import { useAudioPlayer, useProgress, usePlaybackControls } from "rn-audio-stream";
@@ -184,7 +166,6 @@ Mark any track as a live stream with `isLive: true`. The player will:
 
 - Disable seek (calling `seek()` is a no-op)
 - Report `position = 0` and `duration = Infinity`
-- Skip gapless pre-buffering for this track
 - Ignore repeat-track mode
 
 ```ts
@@ -203,26 +184,9 @@ await player.setQueue([radioStation], 0, true);
 
 ## Gapless playback
 
-Gapless is **enabled by default**. The player pre-buffers the next track
-`gaplessPreloadSeconds` (default: 10) before the current track ends, so
-the native audio engine can cross over at the sample boundary with zero silence.
+Gapless pre-buffering is **not available** with `react-native-sound-player`.
 
-```ts
-const player = await createAudioPlayer({
-  gapless: true,
-  gaplessPreloadSeconds: 10, // start pre-buffering 10 s before end
-});
-```
-
-To disable gapless (e.g. for live-stream-only queues):
-
-```ts
-const player = await createAudioPlayer({ gapless: false });
-```
-
-> **Note**: Gapless relies on `react-native-track-player`'s built-in queue
-> pre-buffering, backed by ExoPlayer on Android and AVQueuePlayer on iOS.
-> Actual gaplessness depends on the audio codec and server latency.
+Passing `gapless: true` will throw during `player.init()`.
 
 ---
 
@@ -317,7 +281,7 @@ new AudioPlayer(options?: AudioPlayerOptions)
 
 | Method | Description |
 |--------|-------------|
-| `init()` | **Required first call.** Sets up RNTP. |
+| `init()` | **Required first call.** Sets up SoundPlayer bindings. |
 | `setQueue(tracks, startIndex?, autoPlay?)` | Replace queue and optionally start playing. |
 | `addToQueue(tracks)` | Append tracks to the queue. |
 | `playNext(track)` | Insert a track immediately after the current one. |
@@ -343,31 +307,6 @@ new AudioPlayer(options?: AudioPlayerOptions)
 #### `state` property
 
 Returns a read-only `PlayerState` snapshot. See [TypeScript types](#typescript-types).
-
----
-
-## Background audio setup
-
-### iOS — `Info.plist`
-
-Add the `audio` background mode to your `ios/MyApp/Info.plist`:
-
-```xml
-<key>UIBackgroundModes</key>
-<array>
-  <string>audio</string>
-</array>
-```
-
-### Android — `AndroidManifest.xml`
-
-RNTP's auto-linking adds the required `<service>` declaration automatically.
-If you see issues, verify the manifest contains:
-
-```xml
-<service android:name="com.doublesymmetry.trackplayer.service.MusicService"
-         android:exported="false" />
-```
 
 ---
 

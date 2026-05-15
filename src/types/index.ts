@@ -241,23 +241,20 @@ export interface AudioPlayerOptions {
   shuffle?: boolean;
 
   /**
-   * **Gapless playback** — pre-buffer the next track while the current
-   * one is still playing.
+   * Gapless playback toggle.
    *
-   * When enabled, the player starts fetching and decoding the next queue
-   * item when `position >= duration - gaplessPreloadSeconds`.
-   * This eliminates the silence gap between consecutive tracks.
+   * Not supported when using `react-native-sound-player`.
+   * Passing `true` causes `AudioPlayer.init()` to throw.
    *
-   * ⚠️  Live streams (`isLive: true`) are never pre-buffered regardless
-   * of this setting.
-   *
-   * Default: `true`.
+   * Default: `false`.
    */
   gapless?: boolean;
 
   /**
    * How many seconds before track-end to begin pre-buffering the next track.
    * Only relevant when `gapless: true`.
+   *
+   * Not used with `react-native-sound-player`.
    *
    * Lower values use less memory; higher values give more buffer headroom
    * on slow connections.
@@ -281,12 +278,16 @@ export interface AudioPlayerOptions {
   /**
    * User-agent string sent with stream requests.
    * Useful to identify your app to Navidrome / icecast servers.
+   *
+   * Not supported when using `react-native-sound-player`.
    */
   userAgent?: string;
 
   /**
    * Extra HTTP headers attached to every stream request.
    * E.g. `{ Authorization: "Bearer <token>" }` for authenticated endpoints.
+   *
+   * Not supported when using `react-native-sound-player`.
    */
   headers?: Record<string, string>;
 
@@ -294,6 +295,8 @@ export interface AudioPlayerOptions {
    * Called when the system media controls (lock screen, notification,
    * CarPlay, Android Auto) request a specific action.
    * If omitted the player handles all actions automatically.
+   *
+   * Not currently emitted when using `react-native-sound-player`.
    */
   onRemoteControl?: (action: RemoteControlAction) => void;
 }
