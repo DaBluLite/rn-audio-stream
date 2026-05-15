@@ -35,7 +35,7 @@ A well-typed React Native audio player module with first-class support for:
 npm install git+https://git.dablulite.dev/DaBluLite/rn-audio-stream.git
 
 # 2. Install the required native peer dependency
-npm install react-native-sound-player
+npm install react-native-track-player
 
 # 3. iOS — link the native CocoaPods pod
 cd ios && pod install
@@ -44,6 +44,15 @@ cd ios && pod install
 ```
 
 > **React Native version**: requires ≥ 0.73. Uses the New Architecture (Fabric / JSI) where available.
+
+### Register playback service (required for lock-screen controls / background)
+
+```ts
+import TrackPlayer from "react-native-track-player";
+import playbackService from "rn-audio-stream/playbackService";
+
+TrackPlayer.registerPlaybackService(() => playbackService);
+```
 
 ---
 
@@ -184,9 +193,10 @@ await player.setQueue([radioStation], 0, true);
 
 ## Gapless playback
 
-Gapless pre-buffering is **not available** with `react-native-sound-player`.
+`react-native-track-player` can reduce transition gaps by keeping a native queue,
+but exact sample-accurate gapless behavior still depends on codec/container/device.
 
-Passing `gapless: true` will throw during `player.init()`.
+`gapless` remains available in `AudioPlayerOptions` for compatibility.
 
 ---
 
@@ -281,7 +291,7 @@ new AudioPlayer(options?: AudioPlayerOptions)
 
 | Method | Description |
 |--------|-------------|
-| `init()` | **Required first call.** Sets up SoundPlayer bindings. |
+| `init()` | **Required first call.** Sets up Track Player bindings. |
 | `setQueue(tracks, startIndex?, autoPlay?)` | Replace queue and optionally start playing. |
 | `addToQueue(tracks)` | Append tracks to the queue. |
 | `playNext(track)` | Insert a track immediately after the current one. |

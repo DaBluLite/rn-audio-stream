@@ -1,6 +1,6 @@
 {
   "name": "@dablulite/rn-audio-stream",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "React Native audio player with streaming, gapless playback, shuffle and repeat",
   "main": "lib/index.js",
   "module": "lib/index.js",
@@ -33,6 +33,11 @@
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js",
       "require": "./lib/index.js"
+    },
+    "./playbackService": {
+      "types": "./lib/playbackService.d.ts",
+      "import": "./lib/playbackService.js",
+      "require": "./lib/playbackService.js"
     }
   },
   "author": "",
@@ -40,7 +45,7 @@
   "peerDependencies": {
     "react": ">=18.0.0",
     "react-native": ">=0.73.0",
-    "react-native-sound-player": ">=0.13.0"
+    "react-native-track-player": ">=4.1.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
@@ -48,7 +53,7 @@
     "@types/react": "^18.0.0",
     "@types/react-native": "^0.73.0",
     "jest": "^29.5.0",
-    "react-native-sound-player": "^0.13.4",
+    "react-native-track-player": "^4.1.2",
     "ts-jest": "^29.1.0",
     "typescript": "^5.4.0"
   },
@@ -61,7 +66,10 @@
       }
     },
     "moduleNameMapper": {
-      "^react-native-sound-player$": "<rootDir>/__mocks__/react-native-sound-player.ts"
+      "^react-native-track-player$": "<rootDir>/__mocks__/react-native-track-player.ts"
     }
+  },
+  "dependencies": {
+    "react-native-track-player": "^4.1.2"
   }
 }

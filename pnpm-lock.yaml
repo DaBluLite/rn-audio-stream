@@ -14,6 +14,9 @@ importers:
       react-native:
         specifier: '>=0.73.0'
         version: 0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5)
+      react-native-track-player:
+        specifier: ^4.1.2
+        version: 4.1.2(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5)
     devDependencies:
       '@types/jest':
         specifier: ^29.5.0
@@ -1370,6 +1373,19 @@ packages:
 
   react-native-sound-player@0.13.4:
     resolution: {integrity: sha512-LVq3H96ks0pc4WsQoxnw1KKKMzED33zdpNyqbC4sEZUcqNRjQT83t4uVfrmUzt1yMfg7xwISvz2LC1Yrr3vQuw==}
+
+  react-native-track-player@4.1.2:
+    resolution: {integrity: sha512-cIgMlqVJx/95hirUWPRW8CHxiBFj9Rjl/voKHh2jF/2URYMTQyt76t/m2FKvjeYUW2doKv4QSCBIOUmtyDLtJw==}
+    peerDependencies:
+      react: '>=16.8.6'
+      react-native: '>=0.60.0-rc.2'
+      react-native-windows: '>=0.63.0'
+      shaka-player: ^4.7.9
+    peerDependenciesMeta:
+      react-native-windows:
+        optional: true
+      shaka-player:
+        optional: true
 
   react-native@0.85.1:
     resolution: {integrity: sha512-1K2TIvu2M1C8gqkPevi/MuLan16mQvEdURiTlwHgrb6S2vvkDyik6TrkkXMlMMhz9hF5RT8wFyDUdlpGFlkpXg==}
@@ -3439,6 +3455,11 @@ snapshots:
   react-is@18.3.1: {}
 
   react-native-sound-player@0.13.4: {}
+
+  react-native-track-player@4.1.2(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5):
+    dependencies:
+      react: 19.2.5
+      react-native: 0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5)
 
   react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5):
     dependencies:

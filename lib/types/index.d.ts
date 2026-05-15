@@ -191,17 +191,12 @@ export interface AudioPlayerOptions {
     /**
      * Gapless playback toggle.
      *
-     * Not supported when using `react-native-sound-player`.
-     * Passing `true` causes `AudioPlayer.init()` to throw.
-     *
      * Default: `false`.
      */
     gapless?: boolean;
     /**
      * How many seconds before track-end to begin pre-buffering the next track.
      * Only relevant when `gapless: true`.
-     *
-     * Not used with `react-native-sound-player`.
      *
      * Lower values use less memory; higher values give more buffer headroom
      * on slow connections.
@@ -222,23 +217,17 @@ export interface AudioPlayerOptions {
     /**
      * User-agent string sent with stream requests.
      * Useful to identify your app to Navidrome / icecast servers.
-     *
-     * Not supported when using `react-native-sound-player`.
      */
     userAgent?: string;
     /**
      * Extra HTTP headers attached to every stream request.
      * E.g. `{ Authorization: "Bearer <token>" }` for authenticated endpoints.
-     *
-     * Not supported when using `react-native-sound-player`.
      */
     headers?: Record<string, string>;
     /**
      * Called when the system media controls (lock screen, notification,
      * CarPlay, Android Auto) request a specific action.
      * If omitted the player handles all actions automatically.
-     *
-     * Not currently emitted when using `react-native-sound-player`.
      */
     onRemoteControl?: (action: RemoteControlAction) => void;
 }

@@ -1,7 +1,7 @@
 /**
  * @module rn-audio-stream/AudioPlayer
  *
- * Core audio player class built on top of `react-native-sound-player`.
+ * Core audio player class built on top of `react-native-track-player`.
  */
 import type { Track, PlayerState, RepeatMode, PlayerEvents, AudioPlayerOptions } from "./types";
 type EventListener<T> = (payload: T) => void;
@@ -44,13 +44,17 @@ export declare class AudioPlayer {
     private _stopProgressPolling;
     private _syncStateWithQueue;
     private _loadCurrent;
-    private _handleTrackFinished;
     private _handlePlaybackError;
     private _toPlayerError;
     private _updateState;
     private _emitStateChange;
     private _emit;
     private _assertInitialized;
+    private _replaceNativeQueue;
+    private _toNativeTrack;
+    private _toNativeRepeatMode;
+    private _mapNativeState;
+    private _isAlreadySetupError;
 }
 export declare function createAudioPlayer(options?: AudioPlayerOptions): Promise<AudioPlayer>;
 export {};

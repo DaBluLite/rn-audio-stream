@@ -1,14 +1,23 @@
 /**
  * @module rn-audio-stream/AudioPlayer
  *
- * Core audio player class built on top of `react-native-sound-player`.
+ * Core audio player class built on top of `react-native-track-player`.
  */
 
-import SoundPlayer from "react-native-sound-player";
+import TrackPlayer, {
+  AppKilledPlaybackBehavior,
+  Capability,
+  Event,
+  RepeatMode as NativeRepeatMode,
+  State as NativeState,
+  type AddTrack as NativeTrack,
+  type PlaybackState as NativePlaybackState,
+} from "react-native-track-player";
 
 import { QueueManager } from "./utils/QueueManager";
 import type {
   Track,
+  PlaybackState,
   PlayerState,
   RepeatMode,
   PlayerError,
@@ -66,20 +75,48 @@ export class AudioPlayer {
   async init(): Promise<void> {
     if (this._initialized) return;
 
-    if (this._opts.rate !== 1) {
-      throw new Error("AudioPlayer: react-native-sound-player does not support playback rate changes.");
-    }
-    if (Object.keys(this._opts.headers).length > 0) {
-      throw new Error("AudioPlayer: react-native-sound-player does not support per-request headers.");
-    }
-    if (this._opts.userAgent) {
-      throw new Error("AudioPlayer: react-native-sound-player does not support custom User-Agent.");
-    }
-    if (this._opts.gapless) {
-      throw new Error("AudioPlayer: gapless playback is not supported with react-native-sound-player.");
+    try {
+      await TrackPlayer.setupPlayer({
+        autoHandleInterruptions: true,
+      });
+    } catch (e) {
+      if (!this._isAlreadySetupError(e)) {
+        throw e;
+      }
     }
 
-    SoundPlayer.setVolume(this._opts.volume);
+    await TrackPlayer.updateOptions({
+      capabilities: [
+        Capability.Play,
+        Capability.Pause,
+        Capability.Stop,
+        Capability.SeekTo,
+        Capability.SkipToNext,
+        Capability.SkipToPrevious,
+      ],
+      compactCapabilities: [
+        Capability.Play,
+        Capability.Pause,
+        Capability.SkipToNext,
+        Capability.SkipToPrevious,
+      ],
+      notificationCapabilities: [
+        Capability.Play,
+        Capability.Pause,
+        Capability.Stop,
+        Capability.SeekTo,
+        Capability.SkipToNext,
+        Capability.SkipToPrevious,
+      ],
+      progressUpdateEventInterval: 1,
+      android: {
+        appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
+      },
+    });
+    await TrackPlayer.setVolume(this._opts.volume);
+    await TrackPlayer.setRate(this._opts.rate);
+    await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._opts.repeatMode));
+
     this._subscribeToSoundEvents();
     this._initialized = true;
   }
@@ -88,36 +125,40 @@ export class AudioPlayer {
     this._assertInitialized();
     this._queue.setQueue(tracks, startIndex);
     this._syncStateWithQueue();
-    if (autoPlay) {
-      await this.play();
-    } else if (this._queue.current) {
-      await this._loadCurrent(false);
+    if (this._queue.current) {
+      await this._loadCurrent(autoPlay);
     }
   }
 
   async addToQueue(tracks: Track[]): Promise<void> {
     this._assertInitialized();
     this._queue.add(tracks);
+    await TrackPlayer.add(tracks.map((track) => this._toNativeTrack(track)));
     this._syncStateWithQueue();
   }
 
   async playNext(track: Track): Promise<void> {
     this._assertInitialized();
+    const insertAt = this._queue.currentIndex + 1;
     this._queue.insertNext(track);
+    await TrackPlayer.add(this._toNativeTrack(track), insertAt);
     this._syncStateWithQueue();
   }
 
   async removeFromQueue(id: string): Promise<void> {
     this._assertInitialized();
+    const removeIndex = this._queue.tracks.findIndex((track) => track.id === id);
+    if (removeIndex === -1) return;
+
     const wasCurrentId = this._queue.current?.id;
     const removed = this._queue.remove(id);
     if (!removed) return;
 
     if (wasCurrentId === id) {
       if (this._queue.current) {
-        await this._loadCurrent(this._state.playbackState === "playing");
+        await TrackPlayer.remove(removeIndex);
       } else {
-        SoundPlayer.stop();
+        await TrackPlayer.reset();
         this._updateState({
           playbackState: "idle",
           position: 0,
@@ -129,13 +170,14 @@ export class AudioPlayer {
         });
       }
     } else {
+      await TrackPlayer.remove(removeIndex);
       this._syncStateWithQueue();
     }
   }
 
   async clearQueue(): Promise<void> {
     this._assertInitialized();
-    SoundPlayer.stop();
+    await TrackPlayer.reset();
     this._stopProgressPolling();
     this._queue.clear();
     this._updateState({
@@ -154,26 +196,16 @@ export class AudioPlayer {
     this._assertInitialized();
     if (!this._queue.current) return;
 
-    if (this._state.playbackState === "paused") {
-      try {
-        SoundPlayer.resume();
-        this._retryAttempts = 0;
-        this._updateState({ playbackState: "playing", error: null });
-        this._startProgressPolling();
-      } catch (e) {
-        this._handlePlaybackError(e);
-        throw e;
-      }
-      return;
-    }
-
-    await this._loadCurrent(true);
+    await TrackPlayer.play();
+    this._retryAttempts = 0;
+    this._updateState({ playbackState: "playing", error: null });
+    this._startProgressPolling();
   }
 
   async pause(): Promise<void> {
     this._assertInitialized();
     try {
-      SoundPlayer.pause();
+      await TrackPlayer.pause();
       this._updateState({ playbackState: "paused" });
       this._stopProgressPolling();
     } catch (e) {
@@ -193,7 +225,7 @@ export class AudioPlayer {
   async stop(): Promise<void> {
     this._assertInitialized();
     try {
-      SoundPlayer.stop();
+      await TrackPlayer.stop();
       this._stopProgressPolling();
       this._updateState({ playbackState: "stopped", position: 0, buffered: 0 });
     } catch (e) {
@@ -210,14 +242,18 @@ export class AudioPlayer {
       return;
     }
 
-    const nextTrack = this._queue.next(this._state.repeatMode);
-    if (!nextTrack) {
-      await this.stop();
-      this._emit("queueEnd", undefined as void);
-      return;
+    try {
+      await TrackPlayer.skipToNext();
+      await TrackPlayer.play();
+    } catch (e) {
+      if (this._state.repeatMode === "off") {
+        this._updateState({ playbackState: "ended", position: 0 });
+        this._emit("queueEnd", undefined as void);
+        return;
+      }
+      this._handlePlaybackError(e);
+      throw e;
     }
-
-    await this._loadCurrent(true);
   }
 
   async previous(): Promise<void> {
@@ -228,14 +264,19 @@ export class AudioPlayer {
       return;
     }
 
-    this._queue.previous(this._state.repeatMode);
-    await this._loadCurrent(true);
+    try {
+      await TrackPlayer.skipToPrevious();
+      await TrackPlayer.play();
+    } catch (e) {
+      await this.seek(0);
+    }
   }
 
   async skipToIndex(index: number): Promise<void> {
     this._assertInitialized();
     this._queue.jumpTo(index);
-    await this._loadCurrent(true);
+    await TrackPlayer.skip(index);
+    await TrackPlayer.play();
   }
 
   async seek(position: number): Promise<void> {
@@ -243,7 +284,7 @@ export class AudioPlayer {
     if (this._state.currentTrack?.isLive) return;
     const clamped = Math.max(0, Math.min(position, this._state.duration || Infinity));
     try {
-      SoundPlayer.seek(clamped);
+      await TrackPlayer.seekTo(clamped);
       this._updateState({ position: clamped });
     } catch (e) {
       this._handlePlaybackError(e);
@@ -253,18 +294,18 @@ export class AudioPlayer {
 
   async setVolume(volume: number): Promise<void> {
     const clamped = Math.max(0, Math.min(1, volume));
-    SoundPlayer.setVolume(clamped);
+    await TrackPlayer.setVolume(clamped);
     this._updateState({ volume: clamped });
   }
 
   async setRate(rate: number): Promise<void> {
-    if (rate !== 1) {
-      throw new Error("AudioPlayer: playback rate is not supported with react-native-sound-player.");
-    }
-    this._updateState({ rate: 1 });
+    const clamped = Math.max(0.25, Math.min(4, rate));
+    await TrackPlayer.setRate(clamped);
+    this._updateState({ rate: clamped });
   }
 
   async setRepeatMode(mode: RepeatMode): Promise<void> {
+    await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(mode));
     this._updateState({ repeatMode: mode });
   }
 
@@ -275,12 +316,20 @@ export class AudioPlayer {
   }
 
   async setShuffle(enabled?: boolean): Promise<void> {
+    const wasPlaying = this._state.playbackState === "playing";
+
     const currentId = this._queue.current?.id ?? null;
     this._queue.setShuffle(enabled);
     if (currentId) {
       const idx = this._queue.tracks.findIndex((t) => t.id === currentId);
       if (idx !== -1) this._queue.jumpTo(idx);
     }
+
+    await this._replaceNativeQueue();
+    if (wasPlaying) {
+      await TrackPlayer.play();
+    }
+
     this._updateState({
       shuffle: this._queue.shuffle,
       queue: this._queue.tracks,
@@ -321,7 +370,7 @@ export class AudioPlayer {
     this._stopProgressPolling();
     for (const sub of this._soundSubscriptions) sub.remove();
     this._soundSubscriptions = [];
-    SoundPlayer.stop();
+    await TrackPlayer.stop();
     this._queue.clear();
     this._listeners = {};
     this._initialized = false;
@@ -329,16 +378,67 @@ export class AudioPlayer {
 
   private _subscribeToSoundEvents(): void {
     this._soundSubscriptions.push(
-      SoundPlayer.addEventListener("FinishedPlaying", ({ success }) => {
-        if (!success) return;
-        void this._handleTrackFinished();
-      }),
-      SoundPlayer.addEventListener("OnSetupError", (e) => {
-        this._handlePlaybackError({
-          code: "SETUP_ERROR",
-          message: "react-native-sound-player setup error.",
-          cause: e,
+      TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, (event) => {
+        if (typeof event.index === "number") {
+          try {
+            this._queue.jumpTo(event.index);
+          } catch (e) {
+            console.warn("[AudioPlayer] Received out-of-range active track index:", event.index, e);
+          }
+        }
+
+        const previous = this._state.currentTrack;
+        const current = typeof event.index === "number"
+          ? this._queue.tracks[event.index] ?? null
+          : null;
+
+        this._updateState({
+          currentTrack: current,
+          currentIndex: typeof event.index === "number" ? event.index : -1,
+          position: 0,
+          duration: current?.isLive ? Infinity : (current?.duration ?? 0),
         });
+
+        if (!previous || previous.id !== current?.id) {
+          if (current) {
+            this._emit("trackChange", { previous, current });
+          }
+        }
+      }),
+      TrackPlayer.addEventListener(Event.PlaybackState, (event: NativePlaybackState) => {
+        const playbackState = this._mapNativeState(event.state);
+        this._updateState({ playbackState });
+        if (playbackState === "playing" || playbackState === "paused") {
+          this._startProgressPolling();
+        } else {
+          this._stopProgressPolling();
+        }
+      }),
+      TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ position }) => {
+        this._stopProgressPolling();
+        this._updateState({ playbackState: "ended", position });
+        this._emit("queueEnd", undefined as void);
+      }),
+      TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+        this._handlePlaybackError(event);
+      }),
+      TrackPlayer.addEventListener(Event.RemotePlay, () => {
+        this._opts.onRemoteControl({ type: "play" });
+      }),
+      TrackPlayer.addEventListener(Event.RemotePause, () => {
+        this._opts.onRemoteControl({ type: "pause" });
+      }),
+      TrackPlayer.addEventListener(Event.RemoteStop, () => {
+        this._opts.onRemoteControl({ type: "stop" });
+      }),
+      TrackPlayer.addEventListener(Event.RemoteNext, () => {
+        this._opts.onRemoteControl({ type: "next" });
+      }),
+      TrackPlayer.addEventListener(Event.RemotePrevious, () => {
+        this._opts.onRemoteControl({ type: "previous" });
+      }),
+      TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => {
+        this._opts.onRemoteControl({ type: "seek", position });
       })
     );
   }
@@ -350,21 +450,21 @@ export class AudioPlayer {
         if (this._state.playbackState !== "playing" && this._state.playbackState !== "paused") {
           return;
         }
-        const info = await SoundPlayer.getInfo();
+        const info = await TrackPlayer.getProgress();
         const duration = this._state.currentTrack?.isLive
           ? Infinity
           : (info.duration || this._state.currentTrack?.duration || 0);
-        const position = this._state.currentTrack?.isLive ? 0 : info.currentTime;
+        const position = this._state.currentTrack?.isLive ? 0 : info.position;
 
         this._updateState({
           position,
           duration,
-          buffered: 0,
+          buffered: info.buffered ?? 0,
         });
         this._emit("progress", {
           position,
           duration,
-          buffered: 0,
+          buffered: info.buffered ?? 0,
         });
       } catch (e) {
         console.warn("[AudioPlayer] Failed to read playback info:", e);
@@ -393,12 +493,9 @@ export class AudioPlayer {
 
     const previous = this._state.currentTrack;
     try {
-      if (autoPlay) {
-        SoundPlayer.playUrl(track.url);
-        this._startProgressPolling();
-      } else {
-        SoundPlayer.loadUrl(track.url);
-      }
+      await this._replaceNativeQueue();
+      if (autoPlay) await TrackPlayer.play();
+
       this._retryAttempts = 0;
       this._updateState({
         queue: this._queue.tracks,
@@ -419,31 +516,12 @@ export class AudioPlayer {
     }
   }
 
-  private async _handleTrackFinished(): Promise<void> {
-    if (!this._queue.current) return;
-
-    if (this._state.repeatMode === "track" && !this._state.currentTrack?.isLive) {
-      await this._loadCurrent(true);
-      return;
-    }
-
-    const next = this._queue.next(this._state.repeatMode);
-    if (!next) {
-      this._stopProgressPolling();
-      this._updateState({ playbackState: "ended", position: 0 });
-      this._emit("queueEnd", undefined as void);
-      return;
-    }
-
-    await this._loadCurrent(true);
-  }
-
   private _handlePlaybackError(errorLike: unknown): void {
     const err = this._toPlayerError(errorLike);
     if (this._retryAttempts < this._opts.retryCount && this._queue.current) {
       this._retryAttempts++;
       setTimeout(() => {
-        void this.play().catch((retryError) => {
+        void TrackPlayer.retry().catch((retryError) => {
           const retryErr = this._toPlayerError(retryError);
           this._updateState({ playbackState: "error", error: retryErr });
           this._emit("error", retryErr);
@@ -503,6 +581,86 @@ export class AudioPlayer {
     if (!this._initialized) {
       throw new Error("AudioPlayer: call `await player.init()` before using the player.");
     }
+  }
+
+  private async _replaceNativeQueue(): Promise<void> {
+    const nativeQueue = this._queue.tracks.map((track) => this._toNativeTrack(track));
+    if (nativeQueue.length === 0) {
+      await TrackPlayer.reset();
+      return;
+    }
+    await TrackPlayer.setQueue(nativeQueue);
+    if (this._queue.currentIndex >= 0) {
+      await TrackPlayer.skip(this._queue.currentIndex);
+    }
+    await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._state.repeatMode));
+  }
+
+  private _toNativeTrack(track: Track): NativeTrack {
+    const headers = Object.keys(this._opts.headers).length > 0
+      ? this._opts.headers
+      : undefined;
+    const artwork = typeof track.artwork === "string" ? track.artwork : undefined;
+
+    return {
+      id: track.id,
+      url: track.url,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      artwork,
+      duration: track.duration,
+      isLiveStream: track.isLive,
+      userAgent: this._opts.userAgent || undefined,
+      headers,
+    };
+  }
+
+  private _toNativeRepeatMode(mode: RepeatMode): NativeRepeatMode {
+    switch (mode) {
+      case "track":
+        return NativeRepeatMode.Track;
+      case "queue":
+        return NativeRepeatMode.Queue;
+      case "off":
+      default:
+        return NativeRepeatMode.Off;
+    }
+  }
+
+  private _mapNativeState(state: NativeState): PlaybackState {
+    switch (state) {
+      case NativeState.Loading:
+        return "loading";
+      case NativeState.Buffering:
+        return "buffering";
+      case NativeState.Playing:
+        return "playing";
+      case NativeState.Paused:
+        return "paused";
+      case NativeState.Stopped:
+      case NativeState.Ready:
+        return "stopped";
+      case NativeState.Ended:
+        return "ended";
+      case NativeState.Error:
+        return "error";
+      case NativeState.None:
+      default:
+        return "idle";
+    }
+  }
+
+  private _isAlreadySetupError(errorLike: unknown): boolean {
+    if (!errorLike || typeof errorLike !== "object") return false;
+    const maybeError = errorLike as { code?: unknown; message?: unknown };
+    const code = typeof maybeError.code === "string" ? maybeError.code : "";
+    const message = typeof maybeError.message === "string" ? maybeError.message : "";
+
+    return (
+      code === "player_already_initialized" ||
+      message.toLowerCase().includes("already initialized")
+    );
   }
 }
 
