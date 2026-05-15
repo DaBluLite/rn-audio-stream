@@ -32,7 +32,7 @@ A well-typed React Native audio player module with first-class support for:
 
 ```bash
 # 1. Install this module
-npm install github:dablulite/rn-audio-stream
+npm install git+https://git.dablulite.dev/DaBluLite/rn-audio-stream.git
 
 # 2. Install the required native peer dependency
 npm install react-native-sound-player
