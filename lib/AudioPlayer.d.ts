@@ -51,6 +51,7 @@ export declare class AudioPlayer {
     private _emitStateChange;
     private _emit;
     private _assertInitialized;
+    _getActiveTrackId(): Promise<string | null>;
     private _replaceNativeQueue;
     private _toNativeTrack;
     private _toNativeRepeatMode;

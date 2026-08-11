@@ -46,7 +46,9 @@ export class AudioPlayer {
   private _opts: Required<AudioPlayerOptions>;
   private _queue: QueueManager;
   private _state: PlayerState;
-  private _listeners: Partial<{ [K in keyof PlayerEvents]: Set<EventListener<PlayerEvents[K]>> }> = {};
+  private _listeners: Partial<{
+    [K in keyof PlayerEvents]: Set<EventListener<PlayerEvents[K]>>;
+  }> = {};
   private _soundSubscriptions: Array<{ remove(): void }> = [];
   private _retryAttempts = 0;
   private _initialized = false;
@@ -116,13 +118,19 @@ export class AudioPlayer {
     });
     await TrackPlayer.setVolume(this._opts.volume);
     await TrackPlayer.setRate(this._opts.rate);
-    await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._opts.repeatMode));
+    await TrackPlayer.setRepeatMode(
+      this._toNativeRepeatMode(this._opts.repeatMode),
+    );
 
     this._subscribeToSoundEvents();
     this._initialized = true;
   }
 
-  async setQueue(tracks: Track[], startIndex = 0, autoPlay = false): Promise<void> {
+  async setQueue(
+    tracks: Track[],
+    startIndex = 0,
+    autoPlay = false,
+  ): Promise<void> {
     this._assertInitialized();
     this._queue.setQueue(tracks, startIndex);
     this._syncStateWithQueue();
@@ -148,7 +156,9 @@ export class AudioPlayer {
 
   async removeFromQueue(id: string): Promise<void> {
     this._assertInitialized();
-    const removeIndex = this._queue.tracks.findIndex((track) => track.id === id);
+    const removeIndex = this._queue.tracks.findIndex(
+      (track) => track.id === id,
+    );
     if (removeIndex === -1) return;
 
     const wasCurrentId = this._queue.current?.id;
@@ -283,7 +293,10 @@ export class AudioPlayer {
   async seek(position: number): Promise<void> {
     this._assertInitialized();
     if (this._state.currentTrack?.isLive) return;
-    const clamped = Math.max(0, Math.min(position, this._state.duration || Infinity));
+    const clamped = Math.max(
+      0,
+      Math.min(position, this._state.duration || Infinity),
+    );
     try {
       await TrackPlayer.seekTo(clamped);
       this._updateState({ position: clamped });
@@ -345,20 +358,24 @@ export class AudioPlayer {
 
   on<K extends keyof PlayerEvents>(
     event: K,
-    listener: EventListener<PlayerEvents[K]>
+    listener: EventListener<PlayerEvents[K]>,
   ): UnsubscribeFn {
     if (!this._listeners[event]) {
       this._listeners[event] = new Set() as any;
     }
-    (this._listeners[event] as Set<EventListener<PlayerEvents[K]>>).add(listener);
+    (this._listeners[event] as Set<EventListener<PlayerEvents[K]>>).add(
+      listener,
+    );
     return () => {
-      (this._listeners[event] as Set<EventListener<PlayerEvents[K]>>)?.delete(listener);
+      (this._listeners[event] as Set<EventListener<PlayerEvents[K]>>)?.delete(
+        listener,
+      );
     };
   }
 
   once<K extends keyof PlayerEvents>(
     event: K,
-    listener: EventListener<PlayerEvents[K]>
+    listener: EventListener<PlayerEvents[K]>,
   ): UnsubscribeFn {
     const off = this.on(event, (payload) => {
       off();
@@ -379,44 +396,55 @@ export class AudioPlayer {
 
   private _subscribeToSoundEvents(): void {
     this._soundSubscriptions.push(
-      TrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, (event) => {
-        if (this._isReplacingQueue) return;
+      TrackPlayer.addEventListener(
+        Event.PlaybackActiveTrackChanged,
+        (event) => {
+          if (this._isReplacingQueue) return;
 
-        if (typeof event.index === "number") {
-          try {
-            this._queue.jumpTo(event.index);
-          } catch (e) {
-            console.warn("[AudioPlayer] Received out-of-range active track index:", event.index, e);
+          if (typeof event.index === "number") {
+            try {
+              this._queue.jumpTo(event.index);
+            } catch (e) {
+              console.warn(
+                "[AudioPlayer] Received out-of-range active track index:",
+                event.index,
+                e,
+              );
+            }
           }
-        }
 
-        const previous = this._state.currentTrack;
-        const current = typeof event.index === "number"
-          ? this._queue.tracks[event.index] ?? null
-          : null;
+          const previous = this._state.currentTrack;
+          const current =
+            typeof event.index === "number"
+              ? (this._queue.tracks[event.index] ?? null)
+              : null;
 
-        this._updateState({
-          currentTrack: current,
-          currentIndex: typeof event.index === "number" ? event.index : -1,
-          position: 0,
-          duration: current?.isLive ? Infinity : (current?.duration ?? 0),
-        });
+          this._updateState({
+            currentTrack: current,
+            currentIndex: typeof event.index === "number" ? event.index : -1,
+            position: 0,
+            duration: current?.isLive ? Infinity : (current?.duration ?? 0),
+          });
 
-        if (!previous || previous.id !== current?.id) {
-          if (current) {
-            this._emit("trackChange", { previous, current });
+          if (!previous || previous.id !== current?.id) {
+            if (current) {
+              this._emit("trackChange", { previous, current });
+            }
           }
-        }
-      }),
-      TrackPlayer.addEventListener(Event.PlaybackState, (event: NativePlaybackState) => {
-        const playbackState = this._mapNativeState(event.state);
-        this._updateState({ playbackState });
-        if (playbackState === "playing" || playbackState === "paused") {
-          this._startProgressPolling();
-        } else {
-          this._stopProgressPolling();
-        }
-      }),
+        },
+      ),
+      TrackPlayer.addEventListener(
+        Event.PlaybackState,
+        (event: NativePlaybackState) => {
+          const playbackState = this._mapNativeState(event.state);
+          this._updateState({ playbackState });
+          if (playbackState === "playing" || playbackState === "paused") {
+            this._startProgressPolling();
+          } else {
+            this._stopProgressPolling();
+          }
+        },
+      ),
       TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ position }) => {
         this._stopProgressPolling();
         this._updateState({ playbackState: "ended", position });
@@ -442,7 +470,7 @@ export class AudioPlayer {
       }),
       TrackPlayer.addEventListener(Event.RemoteSeek, ({ position }) => {
         this._opts.onRemoteControl({ type: "seek", position });
-      })
+      }),
     );
   }
 
@@ -450,13 +478,16 @@ export class AudioPlayer {
     if (this._progressInterval) return;
     this._progressInterval = setInterval(async () => {
       try {
-        if (this._state.playbackState !== "playing" && this._state.playbackState !== "paused") {
+        if (
+          this._state.playbackState !== "playing" &&
+          this._state.playbackState !== "paused"
+        ) {
           return;
         }
         const info = await TrackPlayer.getProgress();
         const duration = this._state.currentTrack?.isLive
           ? Infinity
-          : (info.duration || this._state.currentTrack?.duration || 0);
+          : info.duration || this._state.currentTrack?.duration || 0;
         const position = this._state.currentTrack?.isLive ? 0 : info.position;
 
         this._updateState({
@@ -539,11 +570,19 @@ export class AudioPlayer {
   }
 
   private _toPlayerError(errorLike: unknown): PlayerError {
-    if (errorLike && typeof errorLike === "object" && "code" in errorLike && "message" in errorLike) {
+    if (
+      errorLike &&
+      typeof errorLike === "object" &&
+      "code" in errorLike &&
+      "message" in errorLike
+    ) {
       const asErr = errorLike as { code?: unknown; message?: unknown };
       return {
         code: typeof asErr.code === "string" ? asErr.code : "PLAYBACK_ERROR",
-        message: typeof asErr.message === "string" ? asErr.message : "Unknown playback error",
+        message:
+          typeof asErr.message === "string"
+            ? asErr.message
+            : "Unknown playback error",
         track: this._queue.current ?? undefined,
         cause: errorLike,
       };
@@ -573,22 +612,46 @@ export class AudioPlayer {
     this._emit("stateChange", this._state);
   }
 
-  private _emit<K extends keyof PlayerEvents>(event: K, payload: PlayerEvents[K]): void {
-    const set = this._listeners[event] as Set<EventListener<PlayerEvents[K]>> | undefined;
+  private _emit<K extends keyof PlayerEvents>(
+    event: K,
+    payload: PlayerEvents[K],
+  ): void {
+    const set = this._listeners[event] as
+      Set<EventListener<PlayerEvents[K]>> | undefined;
     if (!set) return;
     for (const listener of set) {
-      try { listener(payload); } catch (e) { console.warn("[AudioPlayer] Event listener threw:", e); }
+      try {
+        listener(payload);
+      } catch (e) {
+        console.warn("[AudioPlayer] Event listener threw:", e);
+      }
     }
   }
 
   private _assertInitialized(): void {
     if (!this._initialized) {
-      throw new Error("AudioPlayer: call `await player.init()` before using the player.");
+      throw new Error(
+        "AudioPlayer: call `await player.init()` before using the player.",
+      );
+    }
+  }
+
+  async _getActiveTrackId() {
+    try {
+      const index = await TrackPlayer.getActiveTrackIndex();
+      if (index == null || index < 0) return null;
+      const queue = await TrackPlayer.getQueue();
+      const track = queue[index];
+      return track ? String(track.id) : null;
+    } catch (e) {
+      return null;
     }
   }
 
   private async _replaceNativeQueue(targetIndex: number): Promise<void> {
-    const nativeQueue = this._queue.tracks.map((track) => this._toNativeTrack(track));
+    const nativeQueue = this._queue.tracks.map((track) =>
+      this._toNativeTrack(track),
+    );
     this._isReplacingQueue = true;
     try {
       await TrackPlayer.setPlayWhenReady(false);
@@ -597,21 +660,59 @@ export class AudioPlayer {
         return;
       }
 
+      const newCurrentId = this._queue.current?.id;
+      const keepCurrent =
+        newCurrentId != null &&
+        (await this._getActiveTrackId()) === newCurrentId;
+      if (keepCurrent && targetIndex >= 0 && targetIndex < nativeQueue.length) {
+        const existing = await TrackPlayer.getQueue();
+        const activeIndex = await TrackPlayer.getActiveTrackIndex();
+        if (
+          activeIndex != null &&
+          activeIndex >= 0 &&
+          activeIndex < existing.length
+        ) {
+          const toRemove = existing
+            .map((_, i) => i)
+            .filter((i) => i !== activeIndex)
+            .sort((a, b) => b - a);
+          if (toRemove.length > 0) {
+            await TrackPlayer.remove(toRemove);
+          }
+          const before = nativeQueue.slice(0, targetIndex);
+          const after = nativeQueue.slice(targetIndex + 1);
+          if (before.length > 0) {
+            await TrackPlayer.add(before, 0);
+          }
+          if (after.length > 0) {
+            await TrackPlayer.add(after);
+          }
+          await TrackPlayer.setRepeatMode(
+            this._toNativeRepeatMode(this._state.repeatMode),
+          );
+          return;
+        }
+      }
+
       await TrackPlayer.setQueue(nativeQueue);
       if (targetIndex >= 0) {
         await TrackPlayer.skip(targetIndex);
       }
-      await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(this._state.repeatMode));
+      await TrackPlayer.setRepeatMode(
+        this._toNativeRepeatMode(this._state.repeatMode),
+      );
     } finally {
       this._isReplacingQueue = false;
     }
   }
 
   private _toNativeTrack(track: Track): NativeTrack {
-    const headers = Object.keys(this._opts.headers).length > 0
-      ? this._opts.headers
-      : undefined;
-    const artwork = typeof track.artwork === "string" ? track.artwork : undefined;
+    const headers =
+      Object.keys(this._opts.headers).length > 0
+        ? this._opts.headers
+        : undefined;
+    const artwork =
+      typeof track.artwork === "string" ? track.artwork : undefined;
 
     return {
       id: track.id,
@@ -666,7 +767,8 @@ export class AudioPlayer {
     if (!errorLike || typeof errorLike !== "object") return false;
     const maybeError = errorLike as { code?: unknown; message?: unknown };
     const code = typeof maybeError.code === "string" ? maybeError.code : "";
-    const message = typeof maybeError.message === "string" ? maybeError.message : "";
+    const message =
+      typeof maybeError.message === "string" ? maybeError.message : "";
 
     return (
       code === "player_already_initialized" ||
@@ -675,7 +777,9 @@ export class AudioPlayer {
   }
 }
 
-export async function createAudioPlayer(options?: AudioPlayerOptions): Promise<AudioPlayer> {
+export async function createAudioPlayer(
+  options?: AudioPlayerOptions,
+): Promise<AudioPlayer> {
   const player = new AudioPlayer(options);
   await player.init();
   return player;
