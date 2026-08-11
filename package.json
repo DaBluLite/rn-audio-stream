@@ -1,6 +1,6 @@
 {
   "name": "@dablulite/rn-audio-stream",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "React Native audio player with streaming, gapless playback, shuffle and repeat",
   "main": "lib/index.js",
   "module": "lib/index.js",

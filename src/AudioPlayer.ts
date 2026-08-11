@@ -75,12 +75,15 @@ export class AudioPlayer {
     };
   }
 
-  async init(): Promise<void> {
+  async init(icon?: number): Promise<void> {
     if (this._initialized) return;
 
     try {
       await TrackPlayer.setupPlayer({
         autoHandleInterruptions: true,
+      });
+      icon && await TrackPlayer.updateOptions({
+        icon,
       });
     } catch (e) {
       if (!this._isAlreadySetupError(e)) {
@@ -779,8 +782,9 @@ export class AudioPlayer {
 
 export async function createAudioPlayer(
   options?: AudioPlayerOptions,
+  icon?: number,
 ): Promise<AudioPlayer> {
   const player = new AudioPlayer(options);
-  await player.init();
+  await player.init(icon);
   return player;
 }

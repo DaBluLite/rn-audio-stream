@@ -17,7 +17,7 @@ export declare class AudioPlayer {
     private _progressInterval;
     private _isReplacingQueue;
     constructor(options?: AudioPlayerOptions);
-    init(): Promise<void>;
+    init(icon?: number): Promise<void>;
     setQueue(tracks: Track[], startIndex?: number, autoPlay?: boolean): Promise<void>;
     addToQueue(tracks: Track[]): Promise<void>;
     playNext(track: Track): Promise<void>;
@@ -58,6 +58,6 @@ export declare class AudioPlayer {
     private _mapNativeState;
     private _isAlreadySetupError;
 }
-export declare function createAudioPlayer(options?: AudioPlayerOptions): Promise<AudioPlayer>;
+export declare function createAudioPlayer(options?: AudioPlayerOptions, icon?: number): Promise<AudioPlayer>;
 export {};
 //# sourceMappingURL=AudioPlayer.d.ts.map
