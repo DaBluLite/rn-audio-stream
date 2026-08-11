@@ -1,6 +1,6 @@
 {
   "name": "@dablulite/rn-audio-stream",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "React Native audio player with streaming, gapless playback, shuffle and repeat",
   "main": "lib/index.js",
   "module": "lib/index.js",
@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "test": "jest",
     "lint": "eslint src --ext .ts,.tsx",
