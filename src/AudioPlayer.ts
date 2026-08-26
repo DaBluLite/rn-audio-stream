@@ -24,6 +24,9 @@ import type {
   PlayerEvents,
   AudioPlayerOptions,
 } from "./types";
+import type { CastDevice, CastState, AudioPlayerOptionsWithCast } from "./types/cast";
+import { CastEngine } from "./cast/CastEngine";
+import { CacheManager } from "./cache";
 
 const DEFAULT_OPTIONS: Required<AudioPlayerOptions> = {
   volume: 1.0,
@@ -42,9 +45,16 @@ const DEFAULT_OPTIONS: Required<AudioPlayerOptions> = {
 type EventListener<T> = (payload: T) => void;
 type UnsubscribeFn = () => void;
 
+export type AudioPlayerCacheOpts = Partial<import("./cache").CacheConfig & import("./cache").PrefetchConfig & { enabled: boolean }>;
+export interface AudioPlayerOptionsWithCache extends AudioPlayerOptions {
+  streamUrlProvider?: (id: string) => string;
+  cache?: AudioPlayerCacheOpts;
+}
 export class AudioPlayer {
   private _opts: Required<AudioPlayerOptions>;
   private _queue: QueueManager;
+  private _cacheMgr: CacheManager | null = null;
+  private _streamUrlProvider?: (id: string) => string;
   private _state: PlayerState;
   private _listeners: Partial<{
     [K in keyof PlayerEvents]: Set<EventListener<PlayerEvents[K]>>;
@@ -54,10 +64,19 @@ export class AudioPlayer {
   private _initialized = false;
   private _progressInterval: ReturnType<typeof setInterval> | null = null;
   private _isReplacingQueue = false;
+  // Cast engine (secondary playback engine)
+  private _castEngine: CastEngine | null = null;
+  private _useCast = false;
+  private _castOpts: AudioPlayerOptionsWithCast | null = null;
 
-  constructor(options: AudioPlayerOptions = {}) {
-    this._opts = { ...DEFAULT_OPTIONS, ...options };
+  constructor(options: AudioPlayerOptionsWithCache = {}) {
+    this._opts = { ...DEFAULT_OPTIONS, ...options } as Required<AudioPlayerOptions>;
     this._queue = new QueueManager(this._opts.shuffle);
+    this._streamUrlProvider = (options as AudioPlayerOptionsWithCache).streamUrlProvider;
+    const cOpts = (options as AudioPlayerOptionsWithCache).cache;
+    if (cOpts?.enabled !== false) {
+      this._cacheMgr = new CacheManager(cOpts ?? {});
+    }
 
     this._state = {
       currentTrack: null,
@@ -75,8 +94,115 @@ export class AudioPlayer {
     };
   }
 
+  /** Attach Cast engine. Call before or after init(). Enables discovery/session APIs. */
+  enableCast(opts: AudioPlayerOptionsWithCast = {}): CastEngine {
+    this._castOpts = opts;
+    if (this._castEngine) this._castEngine.destroy();
+    this._castEngine = new CastEngine({
+      headers: (opts.headers as Record<string, string>) ?? (this._opts.headers as Record<string, string>),
+      onCastStateChange: (s, d) => { opts.onCastStateChange?.(s, d); this._onCastStateChange(s, d); },
+      onSessionStart: opts.onCastSessionStart,
+      onSessionEnd: opts.onCastSessionEnd,
+      onSessionError: opts.onCastSessionError,
+    });
+    // Bridge Cast media updates -> unified PlayerState/progress events
+    this._castEngine.onPlayerState = (patch) => this._updateState(patch as Partial<PlayerState>);
+    this._castEngine.onProgress = (p) => {
+      this._updateState(p as Partial<PlayerState>);
+      this._emit("progress", p);
+    };
+    this._castEngine.onQueueEnd = () => this._emit("queueEnd", undefined as void);
+    this._castEngine.onError = (e) => {
+      const err: PlayerError = { code: e.code, message: e.message, track: this._queue.current ?? undefined };
+      this._updateState({ playbackState: "error", error: err });
+      this._emit("error", err);
+    };
+    return this._castEngine;
+  }
+
+  get castEngine(): CastEngine | null { return this._castEngine; }
+  get isCasting(): boolean { return this._useCast; }
+  get castState(): CastState | null { return this._castEngine?.castState ?? null; }
+
+  // ---- Cast discovery / session passthrough (Requirement #2) ----
+  async castStartDiscovery(): Promise<void> { if (!this._castEngine) throw new Error("Call enableCast() first"); await this._castEngine.startDiscovery(); }
+  async castStopDiscovery(): Promise<void> { await this._castEngine?.stopDiscovery(); }
+  async castGetDevices(): Promise<CastDevice[]> { if (!this._castEngine) throw new Error("Call enableCast() first"); return this._castEngine.getDevices(); }
+  castOnDevicesUpdated(cb: (d: CastDevice[]) => void) { if (!this._castEngine) throw new Error("Call enableCast() first"); return this._castEngine.onDevicesUpdated(cb); }
+  async castStartSession(deviceId: string): Promise<boolean> { if (!this._castEngine) throw new Error("Call enableCast() first"); return this._castEngine.startSession(deviceId); }
+  async castEndSession(stopCasting = false): Promise<void> { await this._castEngine?.endSession(stopCasting); }
+
+  private async _onCastStateChange(state: CastState, device: CastDevice | null): Promise<void> {
+    if (state === "connected" && device) {
+      // Handoff: pause local, transfer current track+position to Cast (Requirement #1 & #2)
+      await this._handoffToCast();
+    } else if (state === "not_connected" && this._useCast) {
+      await this._handoffToLocal();
+    }
+  }
+
+  private async _handoffToCast(): Promise<void> {
+    const track = this._queue.current;
+    const pos = this._state.position;
+    try { await TrackPlayer.pause(); } catch {}
+    this._stopProgressPolling();
+    this._useCast = true;
+    if (track && this._castEngine) {
+      // Use queue load so receiver has full queue for next/prev
+      if (this._queue.tracks.length > 1) {
+        await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, pos).catch(() => this._castEngine!.load(track, pos, true));
+      } else {
+        await this._castEngine.load(track, pos, true);
+      }
+    }
+    this._updateState({ playbackState: "buffering" });
+  }
+
+  private async _handoffToLocal(): Promise<void> {
+    this._useCast = false;
+    const track = this._queue.current;
+    if (track) {
+      // Restore local queue at same index, seek to last known Cast position
+      const pos = this._state.position;
+      await this._replaceNativeQueue(this._queue.currentIndex).catch(() => {});
+      if (pos > 0) await TrackPlayer.seekTo(pos).catch(() => {});
+    }
+    this._updateState({ playbackState: "paused" });
+  }
+
+  get cache() {
+    const m = this._cacheMgr;
+    if (!m) return undefined;
+    return {
+      getCachedUrl: (id: string) => m.getCachedUrl(id),
+      prefetch: (ids: string[]) => m.prefetchIds(ids, (id)=> this._streamUrlProvider?.(id) ?? this._queue.tracks.find(t=>t.id===id)?.url ?? ""),
+      clear: () => m.clear(),
+      getStats: () => m.getStats(),
+      getCacheHealthReport: () => m.getCacheHealthReport(),
+      removeTrack: (id: string) => m.removeTrack(id),
+    };
+  }
+
+  private _resolveTrackUrl(track: Track): string {
+    const cached = this._cacheMgr?.getCachedUrlSync(track.id);
+    if (cached) return cached;
+    if (track.url) return track.url;
+    if (this._streamUrlProvider) return this._streamUrlProvider(track.id);
+    return track.url;
+  }
+  private _maybePrefetchAround(index: number) {
+    if (!this._cacheMgr) return;
+    const ids = this._queue.tracks.slice(index, index + 1 + this._cacheMgr.prefetch.prefetchCount).map(t=>t.id);
+    // current + next N, fire-and-forget
+    for (const t of this._queue.tracks.slice(index, index + 1 + this._cacheMgr.prefetch.prefetchCount)) {
+      const url = t.url || this._streamUrlProvider?.(t.id) || "";
+      if (url) void this._cacheMgr.streamAndCacheChunked(t.id, url);
+    }
+  }
+
   async init(icon?: number): Promise<void> {
     if (this._initialized) return;
+    await this._cacheMgr?.init();
 
     try {
       await TrackPlayer.setupPlayer({
@@ -135,18 +261,28 @@ export class AudioPlayer {
     autoPlay = false,
   ): Promise<void> {
     this._assertInitialized();
-    this._queue.setQueue(tracks, startIndex);
+    // offline: filter to cached only
+    let effective = tracks;
+    if (this._cacheMgr?.isOffline) {
+      effective = tracks.filter(t => !!this._cacheMgr!.getCachedUrlSync(t.id));
+      if (effective.length===0) throw new Error("Offline: no cached tracks");
+      startIndex = Math.min(startIndex, effective.length-1);
+    }
+    this._queue.setQueue(effective, startIndex);
     this._syncStateWithQueue();
     if (this._queue.current) {
       await this._loadCurrent(autoPlay);
     }
+    this._maybePrefetchAround(this._queue.currentIndex);
   }
 
   async addToQueue(tracks: Track[]): Promise<void> {
     this._assertInitialized();
     this._queue.add(tracks);
-    await TrackPlayer.add(tracks.map((track) => this._toNativeTrack(track)));
+    await TrackPlayer.add(tracks.map((track) => this._toNativeTrack({ ...track, url: this._resolveTrackUrl(track) })));
     this._syncStateWithQueue();
+    // prefetch added tracks
+    for(const t of tracks){ const u=t.url||this._streamUrlProvider?.(t.id)||""; if(u) void this._cacheMgr?.streamAndCacheChunked(t.id,u); }
   }
 
   async playNext(track: Track): Promise<void> {
@@ -208,8 +344,8 @@ export class AudioPlayer {
 
   async play(): Promise<void> {
     this._assertInitialized();
+    if (this._useCast && this._castEngine?.isCasting) return this._castEngine.play();
     if (!this._queue.current) return;
-
     await TrackPlayer.play();
     this._retryAttempts = 0;
     this._updateState({ playbackState: "playing", error: null });
@@ -218,6 +354,7 @@ export class AudioPlayer {
 
   async pause(): Promise<void> {
     this._assertInitialized();
+    if (this._useCast && this._castEngine?.isCasting) { await this._castEngine.pause(); this._updateState({ playbackState: "paused" }); return; }
     try {
       await TrackPlayer.pause();
       this._updateState({ playbackState: "paused" });
@@ -296,10 +433,8 @@ export class AudioPlayer {
   async seek(position: number): Promise<void> {
     this._assertInitialized();
     if (this._state.currentTrack?.isLive) return;
-    const clamped = Math.max(
-      0,
-      Math.min(position, this._state.duration || Infinity),
-    );
+    const clamped = Math.max(0, Math.min(position, this._state.duration || Infinity));
+    if (this._useCast && this._castEngine?.isCasting) { await this._castEngine.seek(clamped); this._updateState({ position: clamped }); return; }
     try {
       await TrackPlayer.seekTo(clamped);
       this._updateState({ position: clamped });
@@ -311,6 +446,7 @@ export class AudioPlayer {
 
   async setVolume(volume: number): Promise<void> {
     const clamped = Math.max(0, Math.min(1, volume));
+    if (this._useCast && this._castEngine?.isCasting) await this._castEngine.setVolume(clamped).catch(() => {});
     await TrackPlayer.setVolume(clamped);
     this._updateState({ volume: clamped });
   }
@@ -391,6 +527,8 @@ export class AudioPlayer {
     this._stopProgressPolling();
     for (const sub of this._soundSubscriptions) sub.remove();
     this._soundSubscriptions = [];
+    this._castEngine?.destroy();
+    this._castEngine = null; this._useCast = false;
     await TrackPlayer.stop();
     this._queue.clear();
     this._listeners = {};
@@ -716,10 +854,11 @@ export class AudioPlayer {
         : undefined;
     const artwork =
       typeof track.artwork === "string" ? track.artwork : undefined;
+    const url = this._resolveTrackUrl(track);
 
     return {
       id: track.id,
-      url: track.url,
+      url,
       title: track.title,
       artist: track.artist,
       album: track.album,

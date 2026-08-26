@@ -28,6 +28,9 @@ export {
   useNowPlaying,
 } from "./hooks";
 
+export { CastEngine } from "./cast/CastEngine";
+export type { CastDevice, CastState, AudioPlayerOptionsWithCast } from "./types/cast";
+
 // ── Types (re-exported for consumers) ─────────────────────────────────────────
 export type {
   Track,

@@ -14,6 +14,9 @@ importers:
       react-native:
         specifier: '>=0.73.0'
         version: 0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5)
+      react-native-google-cast:
+        specifier: ^4.9.1
+        version: 4.9.1(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5)
       react-native-track-player:
         specifier: ^4.1.2
         version: 4.1.2(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5)
@@ -1367,6 +1370,12 @@ packages:
 
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
+
+  react-native-google-cast@4.9.1:
+    resolution: {integrity: sha512-/HvIKAaWHtG6aTNCxrNrqA2ftWGkfH0M/2iN+28pdGUXpKmueb33mgL1m8D4zzwEODQMcmpfoCsym1IwDvugBQ==}
+    peerDependencies:
+      react: '*'
+      react-native: '*'
 
   react-native-track-player@4.1.2:
     resolution: {integrity: sha512-cIgMlqVJx/95hirUWPRW8CHxiBFj9Rjl/voKHh2jF/2URYMTQyt76t/m2FKvjeYUW2doKv4QSCBIOUmtyDLtJw==}
@@ -3447,6 +3456,11 @@ snapshots:
       - utf-8-validate
 
   react-is@18.3.1: {}
+
+  react-native-google-cast@4.9.1(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5):
+    dependencies:
+      react: 19.2.5
+      react-native: 0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5)
 
   react-native-track-player@4.1.2(react-native@0.85.1(@babel/core@7.29.0)(@types/react@18.3.28)(react@19.2.5))(react@19.2.5):
     dependencies:

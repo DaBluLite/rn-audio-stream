@@ -4,11 +4,22 @@
  * Core audio player class built on top of `react-native-track-player`.
  */
 import type { Track, PlayerState, RepeatMode, PlayerEvents, AudioPlayerOptions } from "./types";
+import type { CastDevice, CastState, AudioPlayerOptionsWithCast } from "./types/cast";
+import { CastEngine } from "./cast/CastEngine";
 type EventListener<T> = (payload: T) => void;
 type UnsubscribeFn = () => void;
+export type AudioPlayerCacheOpts = Partial<import("./cache").CacheConfig & import("./cache").PrefetchConfig & {
+    enabled: boolean;
+}>;
+export interface AudioPlayerOptionsWithCache extends AudioPlayerOptions {
+    streamUrlProvider?: (id: string) => string;
+    cache?: AudioPlayerCacheOpts;
+}
 export declare class AudioPlayer {
     private _opts;
     private _queue;
+    private _cacheMgr;
+    private _streamUrlProvider?;
     private _state;
     private _listeners;
     private _soundSubscriptions;
@@ -16,7 +27,44 @@ export declare class AudioPlayer {
     private _initialized;
     private _progressInterval;
     private _isReplacingQueue;
-    constructor(options?: AudioPlayerOptions);
+    private _castEngine;
+    private _useCast;
+    private _castOpts;
+    constructor(options?: AudioPlayerOptionsWithCache);
+    /** Attach Cast engine. Call before or after init(). Enables discovery/session APIs. */
+    enableCast(opts?: AudioPlayerOptionsWithCast): CastEngine;
+    get castEngine(): CastEngine | null;
+    get isCasting(): boolean;
+    get castState(): CastState | null;
+    castStartDiscovery(): Promise<void>;
+    castStopDiscovery(): Promise<void>;
+    castGetDevices(): Promise<CastDevice[]>;
+    castOnDevicesUpdated(cb: (d: CastDevice[]) => void): {
+        remove(): void;
+    };
+    castStartSession(deviceId: string): Promise<boolean>;
+    castEndSession(stopCasting?: boolean): Promise<void>;
+    private _onCastStateChange;
+    private _handoffToCast;
+    private _handoffToLocal;
+    get cache(): {
+        getCachedUrl: (id: string) => Promise<string | null>;
+        prefetch: (ids: string[]) => Promise<void>;
+        clear: () => Promise<void>;
+        getStats: () => Promise<{
+            size: number;
+            count: number;
+        }>;
+        getCacheHealthReport: () => Promise<{
+            corrupt: string[];
+            isOffline: boolean;
+            size: number;
+            count: number;
+        }>;
+        removeTrack: (id: string) => Promise<void>;
+    } | undefined;
+    private _resolveTrackUrl;
+    private _maybePrefetchAround;
     init(icon?: number): Promise<void>;
     setQueue(tracks: Track[], startIndex?: number, autoPlay?: boolean): Promise<void>;
     addToQueue(tracks: Track[]): Promise<void>;

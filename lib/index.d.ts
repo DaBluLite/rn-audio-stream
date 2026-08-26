@@ -15,5 +15,7 @@
  */
 export { AudioPlayer, createAudioPlayer } from "./AudioPlayer";
 export { useAudioPlayer, useProgress, useQueue, usePlaybackControls, useRepeatShuffle, usePlaybackState, useNowPlaying, } from "./hooks";
+export { CastEngine } from "./cast/CastEngine";
+export type { CastDevice, CastState, AudioPlayerOptionsWithCast } from "./types/cast";
 export type { Track, PlayerState, PlaybackState, RepeatMode, PlayerError, PlayerEvents, AudioPlayerOptions, RemoteControlAction, } from "./types";
 //# sourceMappingURL=index.d.ts.map
