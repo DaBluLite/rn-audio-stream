@@ -920,10 +920,34 @@ export class AudioPlayer {
 }
 
 export async function createAudioPlayer(
-  options?: AudioPlayerOptions,
+  options?: AudioPlayerOptions | AudioPlayerOptionsWithCast,
+  icon?: number,
+): Promise<AudioPlayer> {
+  const player = new AudioPlayer(options as AudioPlayerOptions);
+  await player.init(icon);
+  // Auto-enable Cast engine if cast options are present — so factory users
+  // don't need a separate enableCast() call. This is why `castGetDevices()`
+  // was returning [] before: enableCast() was never called.
+  const castOpts = options as AudioPlayerOptionsWithCast;
+  if (castOpts && (castOpts.castAppId !== undefined || castOpts.onCastStateChange !== undefined || castOpts.onCastDevicesChange !== undefined || castOpts.onCastSessionStart !== undefined)) {
+    player.enableCast(castOpts);
+    // Notify devices change via provided callback
+    if (castOpts.onCastDevicesChange) {
+      player.castOnDevicesUpdated(castOpts.onCastDevicesChange);
+    }
+  }
+  return player;
+}
+
+/** Explicit Cast factory — preferred when you need discovery. */
+export async function createCastAudioPlayer(
+  options: AudioPlayerOptionsWithCast = {},
   icon?: number,
 ): Promise<AudioPlayer> {
   const player = new AudioPlayer(options);
   await player.init(icon);
+  player.enableCast(options);
+  if (options.onCastDevicesChange) player.castOnDevicesUpdated(options.onCastDevicesChange);
+  await player.castStartDiscovery().catch(() => {});
   return player;
 }

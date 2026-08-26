@@ -15,7 +15,7 @@
  */
 
 // ── Core class & factory ──────────────────────────────────────────────────────
-export { AudioPlayer, createAudioPlayer } from "./AudioPlayer";
+export { AudioPlayer, createAudioPlayer, createCastAudioPlayer } from "./AudioPlayer";
 
 // ── React hooks ───────────────────────────────────────────────────────────────
 export {
