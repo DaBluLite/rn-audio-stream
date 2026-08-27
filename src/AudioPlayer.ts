@@ -94,10 +94,13 @@ export class AudioPlayer {
     };
   }
 
+  private _castDevicesSub: { remove(): void } | null = null;
+
   /** Attach Cast engine. Call before or after init(). Enables discovery/session APIs. */
   enableCast(opts: AudioPlayerOptionsWithCast = {}): CastEngine {
     this._castOpts = opts;
     if (this._castEngine) this._castEngine.destroy();
+    if (this._castDevicesSub) { this._castDevicesSub.remove(); this._castDevicesSub = null; }
     this._castEngine = new CastEngine({
       headers: (opts.headers as Record<string, string>) ?? (this._opts.headers as Record<string, string>),
       onCastStateChange: (s, d) => { opts.onCastStateChange?.(s, d); this._onCastStateChange(s, d); },
@@ -117,6 +120,14 @@ export class AudioPlayer {
       this._updateState({ playbackState: "error", error: err });
       this._emit("error", err);
     };
+    // Wire onCastDevicesChange — this was missing, so your callback never fired
+    if (opts.onCastDevicesChange) {
+      this._castDevicesSub = this._castEngine.onDevicesUpdated(opts.onCastDevicesChange);
+      // Also emit current devices immediately (DiscoveryManager may have cached list)
+      this._castEngine.getDevices().then(opts.onCastDevicesChange).catch(() => {});
+    }
+    // Auto-start discovery so devices appear without manual castStartDiscovery()
+    this._castEngine.startDiscovery().catch(() => {});
     return this._castEngine;
   }
 
