@@ -296,13 +296,11 @@ export class AudioPlayer {
     if (this._useCast && this._castEngine) {
       if (this._queue.current) {
         const prev = this._state.currentTrack;
-        try {
-          await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, 0, this._toCastRepeatMode(this._state.repeatMode));
-          // Respect autoPlay — pause immediately if false
-          if (!autoPlay) await this._castEngine.pause().catch(()=>{});
-          this._updateState({ playbackState: autoPlay ? "playing" : "paused", position: 0, duration: this._queue.current?.duration ?? 0, error: null });
-          if (!prev || prev.id !== this._queue.current!.id) this._emit("trackChange", { previous: prev, current: this._queue.current! });
-        } catch (e) { await this._loadCurrent(autoPlay); throw e; }
+        // When casting, never touch TrackPlayer — receiver is the engine
+        await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, 0, this._toCastRepeatMode(this._state.repeatMode));
+        if (!autoPlay) await this._castEngine.pause().catch(()=>{});
+        this._updateState({ playbackState: autoPlay ? "playing" : "paused", position: 0, duration: this._queue.current?.duration ?? 0, error: null });
+        if (!prev || prev.id !== this._queue.current!.id) this._emit("trackChange", { previous: prev, current: this._queue.current! });
       }
       return;
     }
@@ -315,7 +313,7 @@ export class AudioPlayer {
   async addToQueue(tracks: Track[]): Promise<void> {
     this._assertInitialized();
     this._queue.add(tracks);
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       try { await this._castEngine!.appendTracks(tracks); }
       catch { await this._castEngine!.loadQueue(this._queue.tracks, this._queue.currentIndex, this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{}); }
       this._syncStateWithQueue(); return;
@@ -330,7 +328,7 @@ export class AudioPlayer {
     this._assertInitialized();
     const insertAt = this._queue.currentIndex + 1;
     this._queue.insertNext(track);
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       try { await this._castEngine!.insertTrackNext(track); }
       catch { await this._castEngine!.loadQueue(this._queue.tracks, this._queue.currentIndex, this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{}); }
       this._syncStateWithQueue(); return;
@@ -346,7 +344,7 @@ export class AudioPlayer {
     const wasCurrentId = this._queue.current?.id;
     const removed = this._queue.remove(id);
     if (!removed) return;
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       const ok = await this._castEngine!.removeFromQueueById(id).catch(() => false);
       if (!ok) await this._castEngine!.loadQueue(this._queue.tracks, Math.max(0, this._queue.currentIndex), this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{});
       if (wasCurrentId === id && !this._queue.current) {
@@ -426,7 +424,7 @@ export class AudioPlayer {
 
   async next(): Promise<void> {
     this._assertInitialized();
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       if (this._state.repeatMode === "track") { await this.seek(0); return; }
       const c: any = this._castEngine!.client;
       if (c?.queueNext) await c.queueNext().catch(async () => { const n = this._queue.next(this._state.repeatMode); if (n) { this._syncStateWithQueue(); await this._castEngine!.load(n, 0, true); } });
@@ -443,7 +441,7 @@ export class AudioPlayer {
   async previous(): Promise<void> {
     this._assertInitialized();
     if (this._state.position > 3) { await this.seek(0); return; }
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       if (this._state.repeatMode === "track") { await this.seek(0); return; }
       const c: any = this._castEngine!.client;
       if (c?.queuePrev) await c.queuePrev().catch(async () => { const p = this._queue.previous(this._state.repeatMode); if (p) { this._syncStateWithQueue(); await this._castEngine!.load(p, 0, true); } });
@@ -458,9 +456,8 @@ export class AudioPlayer {
     this._assertInitialized();
     const target = this._queue.jumpTo(index);
     this._syncStateWithQueue();
-    if (this._shouldUseCast) {
+    if (this._useCast && this._castEngine) {
       const c: any = this._castEngine!.client;
-      // Try queue jump via RemoteMediaClient, fallback to load
       if (c?.queueJumpToItem) await c.queueJumpToItem(c.queueItems?.[index]?.itemId ?? index).catch(async () => await this._castEngine!.load(target, 0, true));
       else await this._castEngine!.load(target, 0, true);
       this._updateState({ currentTrack: target, currentIndex: index, position: 0 });
