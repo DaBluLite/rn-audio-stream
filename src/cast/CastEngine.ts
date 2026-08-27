@@ -49,7 +49,7 @@ function buildCastUrl(track: Track, headers: Record<string, string>): string {
   }
 }
 
-function trackToMediaInfo(track: Track, headers: Record<string, string>) {
+export function trackToMediaInfo(track: Track, headers: Record<string, string>) {
   const contentUrl = buildCastUrl(track, headers);
   const isLive = !!track.isLive;
   // Infer contentType from URL extension fallback to audio/mpeg
@@ -168,7 +168,7 @@ export class CastEngine implements PlaybackEngine {
   }
 
   /** Load full queue via queueData — preferred for gapless queue on receiver */
-  async loadQueue(tracks: Track[], startIndex: number, position = 0): Promise<void> {
+  async loadQueue(tracks: Track[], startIndex: number, position = 0, repeatMode: string = "REPEAT_OFF"): Promise<void> {
     if (!this._client) throw new Error("CastEngine: no active RemoteMediaClient");
     const items = tracks.map((t, i) => ({
       media: trackToMediaInfo(t, this._headers),
@@ -181,11 +181,54 @@ export class CastEngine implements PlaybackEngine {
         name: "rn-audio-stream queue",
         items,
         startIndex,
-        repeatMode: "REPEAT_OFF",
+        repeatMode,
       },
       autoplay: true,
       startTime: position,
     });
+  }
+
+  async removeFromQueueById(trackId: string): Promise<boolean> {
+    if (!this._client) return false;
+    const status: any = await this._client.getMediaStatus?.().catch(() => null);
+    const items: any[] = status?.queueItems ?? [];
+    const match = items.find((it: any) => it.media?.contentId === trackId || it.media?.customData?.trackId === trackId);
+    if (match?.itemId != null && this._client.queueRemoveItem) {
+      await this._client.queueRemoveItem(match.itemId);
+      return true;
+    }
+    return false;
+  }
+
+  async setRepeatMode(mode: string): Promise<void> {
+    if (!this._client) return;
+    if (this._client.setRepeatMode) await this._client.setRepeatMode(mode);
+    else if (this._client.queueSetRepeatMode) await this._client.queueSetRepeatMode(mode);
+  }
+
+  async setPlaybackRate(rate: number): Promise<void> {
+    if (!this._client) return;
+    await this._client.setPlaybackRate(rate);
+  }
+
+  async appendTracks(tracks: Track[]): Promise<void> {
+    if (!this._client) throw new Error("no client");
+    const c: any = this._client;
+    if (c.queueInsertItem) {
+      for (const t of tracks) await c.queueInsertItem({ media: trackToMediaInfo(t, this._headers) });
+      return;
+    }
+    throw new Error("queueInsert not available");
+  }
+
+  async insertTrackNext(track: Track): Promise<void> {
+    if (!this._client) throw new Error("no client");
+    const c: any = this._client;
+    if (c.queueInsertItem) {
+      await c.queueInsertItem({ media: trackToMediaInfo(track, this._headers) }, null);
+      return;
+    }
+    throw new Error("queueInsert not available");
   }
 
   async play(): Promise<void> { if (this._client) await this._client.play(); }
@@ -243,15 +286,21 @@ export class CastEngine implements PlaybackEngine {
       this._client.onMediaStatusUpdated((status: any | null) => {
         if (!status) return;
         const ps = CastEngine.mapPlayerState(status.playerState);
+        // idleReason FINISHED/ERROR should map to ended/error for isPlaying correctness
+        let playbackState: PlaybackState = ps;
+        if (ps === "idle" && status.idleReason === "FINISHED") playbackState = "ended";
+        if (ps === "idle" && status.idleReason === "ERROR") playbackState = "error";
         this.onPlayerState?.({
-          playbackState: ps,
+          playbackState,
           position: status.streamPosition ?? 0,
-          duration: status.mediaInfo?.streamDuration ?? status.streamPosition ?? 0,
+          duration: status.mediaInfo?.streamDuration ?? status.streamDuration ?? status.mediaDuration ?? 0,
           buffered: 0,
-          error: ps === "error" ? { code: "CAST_ERROR", message: status.idleReason ?? "Cast error" } as any : null,
+          error: playbackState === "error" ? { code: "CAST_ERROR", message: status.idleReason ?? "Cast error" } as any : null,
         });
         if (status.idleReason === "FINISHED") this.onQueueEnd?.();
-        // trackChange derived from mediaInfo.contentId change is handled by AudioPlayer queue sync
+        // Detect track change via contentId
+        const cid = status.mediaInfo?.contentId as string | undefined;
+        if (cid) this.onTrackChange?.(cid as any);
       }),
     );
     // MEDIA_PROGRESS_UPDATED -> progress (1s interval)
@@ -309,7 +358,8 @@ export class CastEngine implements PlaybackEngine {
   }
 
   static mapPlayerState(s: string | null | undefined): PlaybackState {
-    switch (s) {
+    const v = (s ?? "").toUpperCase();
+    switch (v) {
       case "PLAYING": return "playing";
       case "PAUSED": return "paused";
       case "BUFFERING": return "buffering";

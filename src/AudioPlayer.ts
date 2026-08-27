@@ -108,8 +108,23 @@ export class AudioPlayer {
       onSessionEnd: opts.onCastSessionEnd,
       onSessionError: opts.onCastSessionError,
     });
-    // Bridge Cast media updates -> unified PlayerState/progress events
-    this._castEngine.onPlayerState = (patch) => this._updateState(patch as Partial<PlayerState>);
+    // Bridge Cast media updates -> unified PlayerState/progress events (keeps useAudioPlayer/useProgress agnostic)
+    const syncTrackFromContentId = (cid: string) => {
+      const idx = this._queue.tracks.findIndex(t => t.id === cid);
+      if (idx !== -1 && idx !== this._queue.currentIndex) {
+        const prev = this._state.currentTrack;
+        this._queue.jumpTo(idx);
+        const cur = this._queue.current!;
+        this._updateState({ currentTrack: cur, currentIndex: idx, position: 0, duration: cur.duration ?? 0 });
+        this._emit("trackChange", { previous: prev, current: cur });
+      }
+    };
+    this._castEngine.onPlayerState = (patch: any) => {
+      // patch may contain contentId string via onTrackChange; normalize
+      if (typeof patch === "string") { syncTrackFromContentId(patch); return; }
+      this._updateState(patch as Partial<PlayerState>);
+    };
+    this._castEngine.onTrackChange = (cid: any) => { if (typeof cid === "string") syncTrackFromContentId(cid); };
     this._castEngine.onProgress = (p) => {
       this._updateState(p as Partial<PlayerState>);
       this._emit("progress", p);
@@ -134,6 +149,7 @@ export class AudioPlayer {
   get castEngine(): CastEngine | null { return this._castEngine; }
   get isCasting(): boolean { return this._useCast; }
   get castState(): CastState | null { return this._castEngine?.castState ?? null; }
+  private get _shouldUseCast(): boolean { return this._useCast && !!this._castEngine?.client; }
 
   // ---- Cast discovery / session passthrough (Requirement #2) ----
   async castStartDiscovery(): Promise<void> { if (!this._castEngine) throw new Error("Call enableCast() first"); await this._castEngine.startDiscovery(); }
@@ -144,8 +160,7 @@ export class AudioPlayer {
   async castEndSession(stopCasting = false): Promise<void> { await this._castEngine?.endSession(stopCasting); }
 
   private async _onCastStateChange(state: CastState, device: CastDevice | null): Promise<void> {
-    if (state === "connected" && device) {
-      // Handoff: pause local, transfer current track+position to Cast (Requirement #1 & #2)
+    if (state === "connected") {
       await this._handoffToCast();
     } else if (state === "not_connected" && this._useCast) {
       await this._handoffToLocal();
@@ -159,12 +174,9 @@ export class AudioPlayer {
     this._stopProgressPolling();
     this._useCast = true;
     if (track && this._castEngine) {
-      // Use queue load so receiver has full queue for next/prev
       if (this._queue.tracks.length > 1) {
-        await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, pos).catch(() => this._castEngine!.load(track, pos, true));
-      } else {
-        await this._castEngine.load(track, pos, true);
-      }
+        await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, pos, this._toCastRepeatMode(this._state.repeatMode)).catch(() => this._castEngine!.load(track, pos, true));
+      } else await this._castEngine.load(track, pos, true);
     }
     this._updateState({ playbackState: "buffering" });
   }
@@ -281,6 +293,19 @@ export class AudioPlayer {
     }
     this._queue.setQueue(effective, startIndex);
     this._syncStateWithQueue();
+    if (this._useCast && this._castEngine) {
+      if (this._queue.current) {
+        const prev = this._state.currentTrack;
+        try {
+          await this._castEngine.loadQueue(this._queue.tracks, this._queue.currentIndex, 0, this._toCastRepeatMode(this._state.repeatMode));
+          // Respect autoPlay — pause immediately if false
+          if (!autoPlay) await this._castEngine.pause().catch(()=>{});
+          this._updateState({ playbackState: autoPlay ? "playing" : "paused", position: 0, duration: this._queue.current?.duration ?? 0, error: null });
+          if (!prev || prev.id !== this._queue.current!.id) this._emit("trackChange", { previous: prev, current: this._queue.current! });
+        } catch (e) { await this._loadCurrent(autoPlay); throw e; }
+      }
+      return;
+    }
     if (this._queue.current) {
       await this._loadCurrent(autoPlay);
     }
@@ -290,6 +315,11 @@ export class AudioPlayer {
   async addToQueue(tracks: Track[]): Promise<void> {
     this._assertInitialized();
     this._queue.add(tracks);
+    if (this._shouldUseCast) {
+      try { await this._castEngine!.appendTracks(tracks); }
+      catch { await this._castEngine!.loadQueue(this._queue.tracks, this._queue.currentIndex, this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{}); }
+      this._syncStateWithQueue(); return;
+    }
     await TrackPlayer.add(tracks.map((track) => this._toNativeTrack({ ...track, url: this._resolveTrackUrl(track) })));
     this._syncStateWithQueue();
     // prefetch added tracks
@@ -300,44 +330,39 @@ export class AudioPlayer {
     this._assertInitialized();
     const insertAt = this._queue.currentIndex + 1;
     this._queue.insertNext(track);
+    if (this._shouldUseCast) {
+      try { await this._castEngine!.insertTrackNext(track); }
+      catch { await this._castEngine!.loadQueue(this._queue.tracks, this._queue.currentIndex, this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{}); }
+      this._syncStateWithQueue(); return;
+    }
     await TrackPlayer.add(this._toNativeTrack(track), insertAt);
     this._syncStateWithQueue();
   }
 
   async removeFromQueue(id: string): Promise<void> {
     this._assertInitialized();
-    const removeIndex = this._queue.tracks.findIndex(
-      (track) => track.id === id,
-    );
+    const removeIndex = this._queue.tracks.findIndex((track) => track.id === id);
     if (removeIndex === -1) return;
-
     const wasCurrentId = this._queue.current?.id;
     const removed = this._queue.remove(id);
     if (!removed) return;
-
-    if (wasCurrentId === id) {
-      if (this._queue.current) {
-        await TrackPlayer.remove(removeIndex);
-      } else {
-        await TrackPlayer.reset();
-        this._updateState({
-          playbackState: "idle",
-          position: 0,
-          duration: 0,
-          buffered: 0,
-          currentTrack: null,
-          currentIndex: -1,
-          queue: [],
-        });
-      }
-    } else {
-      await TrackPlayer.remove(removeIndex);
-      this._syncStateWithQueue();
+    if (this._shouldUseCast) {
+      const ok = await this._castEngine!.removeFromQueueById(id).catch(() => false);
+      if (!ok) await this._castEngine!.loadQueue(this._queue.tracks, Math.max(0, this._queue.currentIndex), this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{});
+      if (wasCurrentId === id && !this._queue.current) {
+        this._updateState({ playbackState: "idle", position: 0, duration: 0, buffered: 0, currentTrack: null, currentIndex: -1, queue: [] });
+      } else this._syncStateWithQueue();
+      return;
     }
+    if (wasCurrentId === id) {
+      if (this._queue.current) await TrackPlayer.remove(removeIndex);
+      else { await TrackPlayer.reset(); this._updateState({ playbackState: "idle", position: 0, duration: 0, buffered: 0, currentTrack: null, currentIndex: -1, queue: [] }); }
+    } else { await TrackPlayer.remove(removeIndex); this._syncStateWithQueue(); }
   }
 
   async clearQueue(): Promise<void> {
     this._assertInitialized();
+    if (this._shouldUseCast) { await this._castEngine!.stop().catch(()=>{}); }
     await TrackPlayer.reset();
     this._stopProgressPolling();
     this._queue.clear();
@@ -355,7 +380,8 @@ export class AudioPlayer {
 
   async play(): Promise<void> {
     this._assertInitialized();
-    if (this._useCast && this._castEngine?.isCasting) return this._castEngine.play();
+    if (this._shouldUseCast) { await this._castEngine!.play(); this._updateState({ playbackState: "playing", error: null }); return; }
+    if (this._useCast && this._castEngine) { await this._castEngine.play().catch(()=>{}); this._updateState({ playbackState: "playing", error: null }); return; }
     if (!this._queue.current) return;
     await TrackPlayer.play();
     this._retryAttempts = 0;
@@ -365,7 +391,8 @@ export class AudioPlayer {
 
   async pause(): Promise<void> {
     this._assertInitialized();
-    if (this._useCast && this._castEngine?.isCasting) { await this._castEngine.pause(); this._updateState({ playbackState: "paused" }); return; }
+    if (this._shouldUseCast) { await this._castEngine!.pause(); this._updateState({ playbackState: "paused" }); return; }
+    if (this._useCast && this._castEngine) { await this._castEngine.pause().catch(()=>{}); this._updateState({ playbackState: "paused" }); return; }
     try {
       await TrackPlayer.pause();
       this._updateState({ playbackState: "paused" });
@@ -386,6 +413,7 @@ export class AudioPlayer {
 
   async stop(): Promise<void> {
     this._assertInitialized();
+    if (this._shouldUseCast) { await this._castEngine!.stop(); this._updateState({ playbackState: "stopped", position: 0, buffered: 0 }); return; }
     try {
       await TrackPlayer.stop();
       this._stopProgressPolling();
@@ -398,45 +426,46 @@ export class AudioPlayer {
 
   async next(): Promise<void> {
     this._assertInitialized();
-
-    if (this._state.repeatMode === "track") {
-      await this.seek(0);
+    if (this._shouldUseCast) {
+      if (this._state.repeatMode === "track") { await this.seek(0); return; }
+      const c: any = this._castEngine!.client;
+      if (c?.queueNext) await c.queueNext().catch(async () => { const n = this._queue.next(this._state.repeatMode); if (n) { this._syncStateWithQueue(); await this._castEngine!.load(n, 0, true); } });
+      else { const n = this._queue.next(this._state.repeatMode); if (n) { this._syncStateWithQueue(); await this._castEngine!.load(n, 0, true); } else { this._updateState({ playbackState: "ended", position: 0 }); this._emit("queueEnd", undefined as void); } }
       return;
     }
-
-    try {
-      await TrackPlayer.skipToNext();
-      await TrackPlayer.play();
-    } catch (e) {
-      if (this._state.repeatMode === "off") {
-        this._updateState({ playbackState: "ended", position: 0 });
-        this._emit("queueEnd", undefined as void);
-        return;
-      }
-      this._handlePlaybackError(e);
-      throw e;
+    if (this._state.repeatMode === "track") { await this.seek(0); return; }
+    try { await TrackPlayer.skipToNext(); await TrackPlayer.play(); } catch (e) {
+      if (this._state.repeatMode === "off") { this._updateState({ playbackState: "ended", position: 0 }); this._emit("queueEnd", undefined as void); return; }
+      this._handlePlaybackError(e); throw e;
     }
   }
 
   async previous(): Promise<void> {
     this._assertInitialized();
-
-    if (this._state.repeatMode === "track" || this._state.position > 3) {
-      await this.seek(0);
+    if (this._state.position > 3) { await this.seek(0); return; }
+    if (this._shouldUseCast) {
+      if (this._state.repeatMode === "track") { await this.seek(0); return; }
+      const c: any = this._castEngine!.client;
+      if (c?.queuePrev) await c.queuePrev().catch(async () => { const p = this._queue.previous(this._state.repeatMode); if (p) { this._syncStateWithQueue(); await this._castEngine!.load(p, 0, true); } });
+      else { const p = this._queue.previous(this._state.repeatMode); if (p) { this._syncStateWithQueue(); await this._castEngine!.load(p, 0, true); } }
       return;
     }
-
-    try {
-      await TrackPlayer.skipToPrevious();
-      await TrackPlayer.play();
-    } catch (e) {
-      await this.seek(0);
-    }
+    if (this._state.repeatMode === "track") { await this.seek(0); return; }
+    try { await TrackPlayer.skipToPrevious(); await TrackPlayer.play(); } catch (e) { await this.seek(0); }
   }
 
   async skipToIndex(index: number): Promise<void> {
     this._assertInitialized();
-    this._queue.jumpTo(index);
+    const target = this._queue.jumpTo(index);
+    this._syncStateWithQueue();
+    if (this._shouldUseCast) {
+      const c: any = this._castEngine!.client;
+      // Try queue jump via RemoteMediaClient, fallback to load
+      if (c?.queueJumpToItem) await c.queueJumpToItem(c.queueItems?.[index]?.itemId ?? index).catch(async () => await this._castEngine!.load(target, 0, true));
+      else await this._castEngine!.load(target, 0, true);
+      this._updateState({ currentTrack: target, currentIndex: index, position: 0 });
+      return;
+    }
     await TrackPlayer.skip(index);
     await TrackPlayer.play();
   }
@@ -445,7 +474,7 @@ export class AudioPlayer {
     this._assertInitialized();
     if (this._state.currentTrack?.isLive) return;
     const clamped = Math.max(0, Math.min(position, this._state.duration || Infinity));
-    if (this._useCast && this._castEngine?.isCasting) { await this._castEngine.seek(clamped); this._updateState({ position: clamped }); return; }
+    if (this._shouldUseCast || (this._useCast && this._castEngine)) { await this._castEngine!.seek(clamped); this._updateState({ position: clamped }); return; }
     try {
       await TrackPlayer.seekTo(clamped);
       this._updateState({ position: clamped });
@@ -464,11 +493,13 @@ export class AudioPlayer {
 
   async setRate(rate: number): Promise<void> {
     const clamped = Math.max(0.25, Math.min(4, rate));
+    if (this._shouldUseCast) await this._castEngine!.setPlaybackRate(clamped).catch(()=>{});
     await TrackPlayer.setRate(clamped);
     this._updateState({ rate: clamped });
   }
 
   async setRepeatMode(mode: RepeatMode): Promise<void> {
+    if (this._shouldUseCast) await this._castEngine!.setRepeatMode(this._toCastRepeatMode(mode)).catch(()=>{});
     await TrackPlayer.setRepeatMode(this._toNativeRepeatMode(mode));
     this._updateState({ repeatMode: mode });
   }
@@ -481,25 +512,20 @@ export class AudioPlayer {
 
   async setShuffle(enabled?: boolean): Promise<void> {
     const wasPlaying = this._state.playbackState === "playing";
-
     const currentId = this._queue.current?.id ?? null;
     this._queue.setShuffle(enabled);
     if (currentId) {
       const idx = this._queue.tracks.findIndex((t) => t.id === currentId);
       if (idx !== -1) this._queue.jumpTo(idx);
     }
-
-    await this._replaceNativeQueue(this._queue.currentIndex);
-    if (wasPlaying) {
-      await TrackPlayer.play();
+    if (this._shouldUseCast) {
+      await this._castEngine!.loadQueue(this._queue.tracks, this._queue.currentIndex, this._state.position, this._toCastRepeatMode(this._state.repeatMode)).catch(()=>{});
+      if (wasPlaying) await this._castEngine!.play().catch(()=>{});
+    } else {
+      await this._replaceNativeQueue(this._queue.currentIndex);
+      if (wasPlaying) await TrackPlayer.play();
     }
-
-    this._updateState({
-      shuffle: this._queue.shuffle,
-      queue: this._queue.tracks,
-      currentTrack: this._queue.current,
-      currentIndex: this._queue.currentIndex,
-    });
+    this._updateState({ shuffle: this._queue.shuffle, queue: this._queue.tracks, currentTrack: this._queue.current, currentIndex: this._queue.currentIndex });
   }
 
   get state(): Readonly<PlayerState> {
@@ -538,6 +564,7 @@ export class AudioPlayer {
     this._stopProgressPolling();
     for (const sub of this._soundSubscriptions) sub.remove();
     this._soundSubscriptions = [];
+    if (this._castDevicesSub) { this._castDevicesSub.remove(); this._castDevicesSub = null; }
     this._castEngine?.destroy();
     this._castEngine = null; this._useCast = false;
     await TrackPlayer.stop();
@@ -551,7 +578,7 @@ export class AudioPlayer {
       TrackPlayer.addEventListener(
         Event.PlaybackActiveTrackChanged,
         (event) => {
-          if (this._isReplacingQueue) return;
+          if (this._isReplacingQueue || this._useCast) return;
 
           if (typeof event.index === "number") {
             try {
@@ -588,21 +615,21 @@ export class AudioPlayer {
       TrackPlayer.addEventListener(
         Event.PlaybackState,
         (event: NativePlaybackState) => {
+          if (this._useCast) return;
           const playbackState = this._mapNativeState(event.state);
           this._updateState({ playbackState });
-          if (playbackState === "playing" || playbackState === "paused") {
-            this._startProgressPolling();
-          } else {
-            this._stopProgressPolling();
-          }
+          if (playbackState === "playing" || playbackState === "paused") this._startProgressPolling();
+          else this._stopProgressPolling();
         },
       ),
       TrackPlayer.addEventListener(Event.PlaybackQueueEnded, ({ position }) => {
+        if (this._useCast) return;
         this._stopProgressPolling();
         this._updateState({ playbackState: "ended", position });
         this._emit("queueEnd", undefined as void);
       }),
       TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+        if (this._useCast) return;
         this._handlePlaybackError(event);
       }),
       TrackPlayer.addEventListener(Event.RemotePlay, () => {
@@ -883,13 +910,16 @@ export class AudioPlayer {
 
   private _toNativeRepeatMode(mode: RepeatMode): NativeRepeatMode {
     switch (mode) {
-      case "track":
-        return NativeRepeatMode.Track;
-      case "queue":
-        return NativeRepeatMode.Queue;
-      case "off":
-      default:
-        return NativeRepeatMode.Off;
+      case "track": return NativeRepeatMode.Track;
+      case "queue": return NativeRepeatMode.Queue;
+      case "off": default: return NativeRepeatMode.Off;
+    }
+  }
+  private _toCastRepeatMode(mode: RepeatMode): string {
+    switch (mode) {
+      case "track": return "REPEAT_SINGLE";
+      case "queue": return "REPEAT_ALL";
+      case "off": default: return "REPEAT_OFF";
     }
   }
 
@@ -940,12 +970,8 @@ export async function createAudioPlayer(
   // don't need a separate enableCast() call. This is why `castGetDevices()`
   // was returning [] before: enableCast() was never called.
   const castOpts = options as AudioPlayerOptionsWithCast;
-  if (castOpts && (castOpts.castAppId !== undefined || castOpts.onCastStateChange !== undefined || castOpts.onCastDevicesChange !== undefined || castOpts.onCastSessionStart !== undefined)) {
+  if (castOpts && (castOpts.castAppId !== undefined || castOpts.onCastStateChange !== undefined || castOpts.onCastDevicesChange !== undefined || castOpts.onCastSessionStart !== undefined || castOpts.onCastSessionEnd !== undefined)) {
     player.enableCast(castOpts);
-    // Notify devices change via provided callback
-    if (castOpts.onCastDevicesChange) {
-      player.castOnDevicesUpdated(castOpts.onCastDevicesChange);
-    }
   }
   return player;
 }
@@ -958,7 +984,5 @@ export async function createCastAudioPlayer(
   const player = new AudioPlayer(options);
   await player.init(icon);
   player.enableCast(options);
-  if (options.onCastDevicesChange) player.castOnDevicesUpdated(options.onCastDevicesChange);
-  await player.castStartDiscovery().catch(() => {});
   return player;
 }
